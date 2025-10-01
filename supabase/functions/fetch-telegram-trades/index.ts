@@ -1,4 +1,5 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,12 +12,91 @@ interface TelegramMessage {
   date: number;
 }
 
-interface TelegramResponse {
-  ok: boolean;
-  result: TelegramMessage[];
+interface Trade {
+  symbol: string;
+  action: string;
+  price: number;
+  quantity?: number;
+  profit_loss?: number;
+  timestamp: string;
+  telegram_message_id: number;
+  raw_message: string;
 }
 
-Deno.serve(async (req) => {
+// Parse trading messages from Telegram
+function parseTradingMessage(message: TelegramMessage): Trade | null {
+  if (!message.text) return null;
+  
+  const text = message.text.toUpperCase();
+  
+  // Common patterns for trading messages
+  // Examples:
+  // "BUY BTCUSDT @ 43500"
+  // "LONG ETH 2500 QTY: 0.5"
+  // "SELL AAPL 150.50 PROFIT: +250"
+  // "SHORT BTC 43000"
+  // "CLOSE BTCUSDT +500 USDT"
+  
+  let symbol = '';
+  let action = '';
+  let price = 0;
+  let quantity: number | undefined;
+  let profit_loss: number | undefined;
+  
+  // Extract action
+  if (text.includes('BUY')) action = 'BUY';
+  else if (text.includes('SELL')) action = 'SELL';
+  else if (text.includes('LONG')) action = 'LONG';
+  else if (text.includes('SHORT')) action = 'SHORT';
+  else if (text.includes('CLOSE')) action = 'CLOSE';
+  else return null;
+  
+  // Extract symbol (common crypto pairs and stocks)
+  const symbolRegex = /([A-Z]{2,10}(USDT|USD|BTC|ETH)?|\$[A-Z]+)/g;
+  const symbols = text.match(symbolRegex);
+  if (symbols && symbols.length > 0) {
+    symbol = symbols[0].replace('$', '');
+  } else {
+    return null;
+  }
+  
+  // Extract price
+  const priceRegex = /[@]?\s*([0-9]+\.?[0-9]*)/g;
+  const prices = text.match(priceRegex);
+  if (prices && prices.length > 0) {
+    price = parseFloat(prices[0].replace('@', '').trim());
+  } else {
+    return null;
+  }
+  
+  // Extract quantity
+  const qtyRegex = /QTY:?\s*([0-9]+\.?[0-9]*)/i;
+  const qtyMatch = text.match(qtyRegex);
+  if (qtyMatch) {
+    quantity = parseFloat(qtyMatch[1]);
+  }
+  
+  // Extract profit/loss
+  const profitRegex = /(PROFIT|P\/L|PNL):?\s*([+-]?[0-9]+\.?[0-9]*)/i;
+  const profitMatch = text.match(profitRegex);
+  if (profitMatch) {
+    profit_loss = parseFloat(profitMatch[2]);
+  }
+  
+  return {
+    symbol,
+    action,
+    price,
+    quantity,
+    profit_loss,
+    timestamp: new Date(message.date * 1000).toISOString(),
+    telegram_message_id: message.message_id,
+    raw_message: message.text
+  };
+}
+
+serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -24,100 +104,91 @@ Deno.serve(async (req) => {
   try {
     const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
     const chatId = Deno.env.get('TELEGRAM_CHAT_ID');
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
     if (!botToken || !chatId) {
-      throw new Error('Telegram credentials not configured');
+      throw new Error('Missing Telegram credentials');
     }
 
+    // Initialize Supabase client
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Fetch recent messages from Telegram
-    const telegramUrl = `https://api.telegram.org/bot${botToken}/getUpdates?chat_id=${chatId}&limit=100`;
-    const telegramResponse = await fetch(telegramUrl);
-    const data: TelegramResponse = await telegramResponse.json();
+    console.log('Fetching messages from Telegram...');
 
-    console.log('Fetched messages:', data.result?.length || 0);
+    // Get the latest message ID we've processed
+    const { data: latestTrade } = await supabase
+      .from('trades')
+      .select('telegram_message_id')
+      .order('telegram_message_id', { ascending: false })
+      .limit(1)
+      .single();
 
-    if (!data.ok || !data.result) {
-      throw new Error('Failed to fetch Telegram messages');
-    }
+    const offset = latestTrade?.telegram_message_id 
+      ? latestTrade.telegram_message_id + 1 
+      : undefined;
 
-    const trades = [];
+    // Fetch updates from Telegram
+    const telegramUrl = `https://api.telegram.org/bot${botToken}/getUpdates?chat_id=${chatId}&limit=100${offset ? `&offset=${offset}` : ''}`;
     
-    // Parse messages for trading data
-    for (const update of data.result) {
-      const message = update.message_id;
-      const text = update.text || '';
-      const timestamp = new Date(update.date * 1000);
+    const response = await fetch(telegramUrl);
+    const data = await response.json();
 
-      // Parse trading signals (examples of patterns to match)
-      // Adjust these patterns based on your actual message format
-      const buyPattern = /(?:BUY|LONG)\s+(\w+)(?:\s+@\s*)?(\d+\.?\d*)/i;
-      const sellPattern = /(?:SELL|SHORT)\s+(\w+)(?:\s+@\s*)?(\d+\.?\d*)/i;
-      const closePattern = /CLOSE\s+(\w+)(?:\s+@\s*)?(\d+\.?\d*)(?:\s+(?:P\/L|PL|Profit):\s*([+-]?\d+\.?\d*))?/i;
-
-      let match;
-      
-      if ((match = text.match(buyPattern))) {
-        trades.push({
-          symbol: match[1],
-          action: 'BUY',
-          price: parseFloat(match[2]),
-          telegram_message_id: message,
-          raw_message: text,
-          timestamp,
-        });
-      } else if ((match = text.match(sellPattern))) {
-        trades.push({
-          symbol: match[1],
-          action: 'SELL',
-          price: parseFloat(match[2]),
-          telegram_message_id: message,
-          raw_message: text,
-          timestamp,
-        });
-      } else if ((match = text.match(closePattern))) {
-        trades.push({
-          symbol: match[1],
-          action: 'CLOSE',
-          price: parseFloat(match[2]),
-          profit_loss: match[3] ? parseFloat(match[3]) : null,
-          telegram_message_id: message,
-          raw_message: text,
-          timestamp,
-        });
-      }
+    if (!data.ok) {
+      throw new Error(`Telegram API error: ${data.description}`);
     }
 
-    console.log('Parsed trades:', trades.length);
+    console.log(`Received ${data.result?.length || 0} updates from Telegram`);
 
-    // Insert new trades (avoiding duplicates)
-    if (trades.length > 0) {
-      for (const trade of trades) {
-        const { data: existing } = await supabase
-          .from('trades')
-          .select('id')
-          .eq('telegram_message_id', trade.telegram_message_id)
-          .single();
+    const trades: Trade[] = [];
 
-        if (!existing) {
-          await supabase.from('trades').insert(trade);
+    // Parse messages for trading data
+    for (const update of data.result || []) {
+      if (update.message) {
+        const trade = parseTradingMessage(update.message);
+        if (trade) {
+          trades.push(trade);
         }
       }
     }
 
+    console.log(`Parsed ${trades.length} trades from messages`);
+
+    // Insert trades into database
+    if (trades.length > 0) {
+      const { error: insertError } = await supabase
+        .from('trades')
+        .insert(trades);
+
+      if (insertError) {
+        console.error('Error inserting trades:', insertError);
+        throw insertError;
+      }
+    }
+
     return new Response(
-      JSON.stringify({ success: true, tradesFound: trades.length }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        success: true, 
+        trades_found: trades.length,
+        message: `Successfully processed ${trades.length} trades`
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200 
+      }
     );
+
   } catch (error) {
     console.error('Error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        success: false 
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500 
+      }
     );
   }
 });

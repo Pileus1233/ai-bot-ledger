@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { StatsCard } from "@/components/StatsCard";
-import { TradesTable } from "@/components/TradesTable";
+import { TradeHistory } from "@/components/TradeHistory";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, TrendingDown, Activity, Percent, RefreshCw } from "lucide-react";
+import { TrendingUp, DollarSign, Activity, Percent, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Trade {
@@ -19,7 +19,8 @@ interface Trade {
 
 const Index = () => {
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const { toast } = useToast();
 
   const fetchTrades = async () => {
@@ -30,33 +31,40 @@ const Index = () => {
 
     if (error) {
       console.error('Error fetching trades:', error);
-      return;
+      toast({
+        title: "Error",
+        description: "Failed to fetch trades",
+        variant: "destructive",
+      });
+    } else {
+      setTrades(data || []);
     }
-
-    setTrades(data || []);
+    setLoading(false);
   };
 
   const syncTelegram = async () => {
-    setLoading(true);
+    setSyncing(true);
     try {
       const { data, error } = await supabase.functions.invoke('fetch-telegram-trades');
       
       if (error) throw error;
-      
+
       toast({
-        title: "Synced!",
-        description: `Found ${data.tradesFound} new trades from Telegram`,
+        title: "Sync Complete",
+        description: `Found ${data.trades_found} new trades`,
       });
-      
+
+      // Refresh trades list
       await fetchTrades();
     } catch (error) {
+      console.error('Error syncing:', error);
       toast({
-        title: "Sync failed",
-        description: error.message,
+        title: "Sync Failed",
+        description: "Could not sync with Telegram",
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      setSyncing(false);
     }
   };
 
@@ -84,50 +92,55 @@ const Index = () => {
     };
   }, []);
 
+  // Calculate statistics
   const totalTrades = trades.length;
-  const profitableTrades = trades.filter(t => t.profit_loss && t.profit_loss > 0).length;
-  const losingTrades = trades.filter(t => t.profit_loss && t.profit_loss < 0).length;
-  const winRate = totalTrades > 0 ? ((profitableTrades / (profitableTrades + losingTrades)) * 100) : 0;
-  const totalPnL = trades.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
+  const tradesWithPL = trades.filter(t => t.profit_loss !== null && t.profit_loss !== undefined);
+  const totalPL = tradesWithPL.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
+  const winningTrades = tradesWithPL.filter(t => (t.profit_loss || 0) > 0).length;
+  const winRate = tradesWithPL.length > 0 ? (winningTrades / tradesWithPL.length) * 100 : 0;
 
-  // Generate chart data
-  const chartData = trades
-    .filter(t => t.profit_loss !== null && t.profit_loss !== undefined)
-    .reverse()
-    .reduce((acc, trade, idx) => {
-      const prevValue = idx > 0 ? acc[idx - 1].value : 0;
-      acc.push({
-        date: new Date(trade.timestamp).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' }),
-        value: prevValue + (trade.profit_loss || 0)
-      });
-      return acc;
-    }, [] as { date: string; value: number }[]);
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-foreground">Loading...</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-background p-4 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-8">
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">AI Trading Bot</h1>
-            <p className="text-muted-foreground">Performance Dashboard</p>
+            <h1 className="text-4xl font-bold text-foreground mb-2">Trading Dashboard</h1>
+            <p className="text-muted-foreground">Track your AI bot's performance</p>
           </div>
           <Button 
             onClick={syncTelegram} 
-            disabled={loading}
-            className="bg-primary hover:bg-primary/90"
+            disabled={syncing}
+            className="bg-accent hover:bg-accent/90 text-accent-foreground"
           >
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
             Sync Telegram
           </Button>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard
             title="Total Trades"
             value={totalTrades}
             icon={Activity}
+          />
+          <StatsCard
+            title="Total P/L"
+            value={`$${totalPL.toFixed(2)}`}
+            icon={DollarSign}
+            trend={{
+              value: totalPL >= 0 ? 'Profitable' : 'In Loss',
+              positive: totalPL >= 0
+            }}
           />
           <StatsCard
             title="Win Rate"
@@ -135,35 +148,17 @@ const Index = () => {
             icon={Percent}
           />
           <StatsCard
-            title="Profitable"
-            value={profitableTrades}
+            title="Winning Trades"
+            value={`${winningTrades}/${tradesWithPL.length}`}
             icon={TrendingUp}
           />
-          <StatsCard
-            title="Total P/L"
-            value={`$${totalPnL.toFixed(2)}`}
-            icon={totalPnL >= 0 ? TrendingUp : TrendingDown}
-            trend={{
-              value: `${totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}`,
-              positive: totalPnL >= 0
-            }}
-          />
         </div>
 
-        {/* Performance Chart */}
-        {chartData.length > 0 && <PerformanceChart data={chartData} />}
+        {/* Chart */}
+        <PerformanceChart trades={trades} />
 
-        {/* Trades Table */}
-        <div className="space-y-4">
-          <h2 className="text-2xl font-bold">Recent Trades</h2>
-          {trades.length > 0 ? (
-            <TradesTable trades={trades} />
-          ) : (
-            <div className="rounded-lg border border-border/50 bg-card/50 p-12 text-center backdrop-blur-sm">
-              <p className="text-muted-foreground">No trades found. Click "Sync Telegram" to fetch trades.</p>
-            </div>
-          )}
-        </div>
+        {/* Trade History */}
+        <TradeHistory trades={trades.slice(0, 20)} />
       </div>
     </div>
   );
