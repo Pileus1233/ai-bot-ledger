@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { TrendingUp } from "lucide-react";
 
 interface Trade {
   timestamp: string;
@@ -65,8 +66,10 @@ export const PerformanceChart = ({ trades }: PerformanceChartProps) => {
           </LineChart>
         </ResponsiveContainer>
         ) : (
-          <div className="flex items-center justify-center h-[300px] text-muted-foreground">
-            No P/L data available yet
+          <div className="flex flex-col items-center justify-center h-[300px] text-muted-foreground">
+            <TrendingUp className="h-8 w-8 mb-2 opacity-50" />
+            <p className="text-sm">No P/L data available yet</p>
+            <p className="text-xs mt-1 opacity-75">Start trading to see performance chart</p>
           </div>
         )}
       </CardContent>

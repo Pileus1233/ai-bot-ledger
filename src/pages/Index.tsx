@@ -120,10 +120,10 @@ const Index = () => {
 
   // Calculate statistics
   const totalTrades = trades.length;
-  const tradesWithPL = trades.filter(t => t.profit_loss !== null && t.profit_loss !== undefined);
+  const tradesWithPL = trades.filter(t => t.profit_loss !== null && t.profit_loss !== undefined && !isNaN(t.profit_loss));
   const totalPL = tradesWithPL.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
   const winningTrades = tradesWithPL.filter(t => (t.profit_loss || 0) > 0).length;
-  const winRate = tradesWithPL.length > 0 ? (winningTrades / tradesWithPL.length) * 100 : 0;
+  const winRate = tradesWithPL.length > 0 ? Math.round((winningTrades / tradesWithPL.length) * 100 * 10) / 10 : 0;
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -133,21 +133,24 @@ const Index = () => {
   if (loading || !session) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-foreground">Loading...</div>
+        <div className="flex items-center gap-2 text-foreground">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          <span>Loading dashboard...</span>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-background p-4 md:p-6">
+      <div className="max-w-7xl mx-auto space-y-4 md:space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Trading Dashboard</h1>
             <p className="text-muted-foreground">Track your AI bot's performance</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
             <Button 
               onClick={syncTelegram} 
               disabled={syncing}
@@ -167,7 +170,7 @@ const Index = () => {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard
             title="Total Trades"
             value={totalTrades}

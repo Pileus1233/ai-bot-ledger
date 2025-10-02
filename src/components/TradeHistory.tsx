@@ -36,9 +36,9 @@ export const TradeHistory = ({ trades }: TradeHistoryProps) => {
   };
 
   return (
-    <Card className="p-6 bg-card border-border">
-      <h2 className="text-xl font-bold text-foreground mb-4">Trade History</h2>
-      <div className="rounded-lg border border-border overflow-hidden">
+    <Card className="p-4 md:p-6 bg-card border-border">
+      <h2 className="text-lg md:text-xl font-bold text-foreground mb-4">Trade History</h2>
+      <div className="rounded-lg border border-border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-muted/50">
@@ -60,7 +60,7 @@ export const TradeHistory = ({ trades }: TradeHistoryProps) => {
                 <TableCell>
                   <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
                     trade.action === 'BUY' || trade.action === 'LONG' 
-                      ? 'bg-profit/10 text-profit' 
+                      ? 'bg-success/10 text-success' 
                       : 'bg-loss/10 text-loss'
                   }`}>
                     {trade.action === 'BUY' || trade.action === 'LONG' ? (
@@ -77,7 +77,7 @@ export const TradeHistory = ({ trades }: TradeHistoryProps) => {
                 </TableCell>
                 <TableCell className={`text-right font-semibold ${
                   trade.profit_loss && trade.profit_loss > 0 
-                    ? 'text-profit' 
+                    ? 'text-success' 
                     : trade.profit_loss && trade.profit_loss < 0 
                     ? 'text-loss' 
                     : 'text-muted-foreground'
