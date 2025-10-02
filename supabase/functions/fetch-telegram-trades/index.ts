@@ -29,6 +29,11 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
   
   const text = message.text;
   
+  // Debug: Log all messages to see what patterns we're missing
+  if (text.length > 10) {
+    console.log('Parsing message:', text.substring(0, 200));
+  }
+  
   // Check if this is a position close message (contains P/L) - Support more Swedish patterns
   const isCloseMessage = text.includes('POSITION STÄNGD') || 
                         text.includes('POSITION CLOSED') ||
@@ -36,11 +41,21 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
                         text.includes('AVSLUTAD POSITION') ||
                         text.includes('PnL:') ||
                         text.includes('Vinst:') ||
-                        text.includes('Förlust:');
+                        text.includes('Förlust:') ||
+                        text.includes('vinst') ||
+                        text.includes('förlust') ||
+                        text.includes('resultat') ||
+                        text.includes('profit') ||
+                        text.includes('loss') ||
+                        text.includes('📈') ||  // Chart up emoji
+                        text.includes('📉');   // Chart down emoji
   
   if (!isCloseMessage) {
     // Skip opening trade messages and status updates - we only care about closed positions with P/L
+    console.log('Message rejected - not a close message:', text.substring(0, 100));
     return null;
+  } else {
+    console.log('Message identified as close message:', text.substring(0, 100));
   }
   
   let symbol = '';
@@ -211,15 +226,39 @@ serve(async (req) => {
       
       console.log(`Received ${data.result?.length || 0} historical updates from Telegram`);
       
-      // Parse all messages for trading data
-      for (const update of data.result || []) {
-        if (update.message && update.message.chat && update.message.chat.id.toString() === chatId) {
-          const trade = parseTradingMessage(update.message);
-          if (trade) {
-            allTrades.push(trade);
+      // Debug: Log first few messages to see what we're getting
+      if (data.result && data.result.length > 0) {
+        console.log('Sample messages received:');
+        for (let i = 0; i < Math.min(3, data.result.length); i++) {
+          const update = data.result[i];
+          if (update.message) {
+            console.log(`Message ${i + 1}:`, {
+              chat_id: update.message.chat?.id,
+              expected_chat_id: chatId,
+              text_preview: update.message.text?.substring(0, 100),
+              date: update.message.date
+            });
           }
         }
       }
+      
+      // Parse all messages for trading data
+      let messagesChecked = 0;
+      let messagesFromCorrectChat = 0;
+      for (const update of data.result || []) {
+        if (update.message) {
+          messagesChecked++;
+          if (update.message.chat && update.message.chat.id.toString() === chatId) {
+            messagesFromCorrectChat++;
+            const trade = parseTradingMessage(update.message);
+            if (trade) {
+              allTrades.push(trade);
+            }
+          }
+        }
+      }
+      
+      console.log(`Debug: Checked ${messagesChecked} messages, ${messagesFromCorrectChat} from correct chat, ${allTrades.length} trades parsed`);
     } else {
       // Get the latest message ID we've processed
       const { data: latestTrade } = await supabase

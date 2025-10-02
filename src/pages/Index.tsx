@@ -5,7 +5,7 @@ import { StatsCard } from "@/components/StatsCard";
 import { TradeHistory } from "@/components/TradeHistory";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, DollarSign, Activity, Percent, RefreshCw, LogOut, Trash2 } from "lucide-react";
+import { TrendingUp, DollarSign, Activity, Percent, RefreshCw, LogOut, Trash2, Bug } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Session } from "@supabase/supabase-js";
 
@@ -125,6 +125,28 @@ const Index = () => {
   const winningTrades = tradesWithPL.filter(t => (t.profit_loss || 0) > 0).length;
   const winRate = tradesWithPL.length > 0 ? Math.round((winningTrades / tradesWithPL.length) * 100 * 10) / 10 : 0;
 
+  const testTelegram = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('test-telegram');
+      
+      if (error) throw error;
+
+      console.log('Telegram test results:', data);
+      
+      toast({
+        title: "Telegram Test Results",
+        description: `Bot: ${data.bot_info?.ok ? 'OK' : 'Failed'}, Messages from target chat: ${data.messages_from_target_chat}`,
+      });
+    } catch (error) {
+      console.error('Telegram test failed:', error);
+      toast({
+        title: "Telegram Test Failed",
+        description: "Check console for details",
+        variant: "destructive",
+      });
+    }
+  };
+
   const resetTrades = async () => {
     if (!confirm('Are you sure you want to delete all trades? This cannot be undone.')) {
       return;
@@ -188,6 +210,14 @@ const Index = () => {
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
               Sync Telegram
+            </Button>
+            <Button 
+              onClick={testTelegram}
+              variant="outline"
+              size="sm"
+            >
+              <Bug className="mr-2 h-4 w-4" />
+              Test
             </Button>
             <Button 
               onClick={resetTrades}
