@@ -116,6 +116,11 @@ serve(async (req) => {
 
     console.log('Fetching messages from Telegram...');
 
+    // Delete any existing webhook first (required to use getUpdates)
+    const deleteWebhookUrl = `https://api.telegram.org/bot${botToken}/deleteWebhook`;
+    await fetch(deleteWebhookUrl);
+    console.log('Webhook deleted (if it existed)');
+
     // Get the latest message ID we've processed
     const { data: latestTrade } = await supabase
       .from('trades')
