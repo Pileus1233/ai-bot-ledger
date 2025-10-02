@@ -23,19 +23,19 @@ interface Trade {
   raw_message: string;
 }
 
-// Parse trading messages from Telegram
+// Parse trading messages from Telegram (Swedish Pileus Trading Bot format)
 function parseTradingMessage(message: TelegramMessage): Trade | null {
   if (!message.text) return null;
   
-  const text = message.text.toUpperCase();
+  const text = message.text;
   
-  // Common patterns for trading messages
-  // Examples:
-  // "BUY BTCUSDT @ 43500"
-  // "LONG ETH 2500 QTY: 0.5"
-  // "SELL AAPL 150.50 PROFIT: +250"
-  // "SHORT BTC 43000"
-  // "CLOSE BTCUSDT +500 USDT"
+  // Check if this is a position close message (contains P/L)
+  const isCloseMessage = text.includes('POSITION STÄNGD') || text.includes('POSITION CLOSED');
+  
+  if (!isCloseMessage) {
+    // Skip opening trade messages and status updates - we only care about closed positions with P/L
+    return null;
+  }
   
   let symbol = '';
   let action = '';
@@ -43,44 +43,38 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
   let quantity: number | undefined;
   let profit_loss: number | undefined;
   
-  // Extract action
-  if (text.includes('BUY')) action = 'BUY';
-  else if (text.includes('SELL')) action = 'SELL';
-  else if (text.includes('LONG')) action = 'LONG';
-  else if (text.includes('SHORT')) action = 'SHORT';
-  else if (text.includes('CLOSE')) action = 'CLOSE';
-  else return null;
-  
-  // Extract symbol (common crypto pairs and stocks)
-  const symbolRegex = /([A-Z]{2,10}(USDT|USD|BTC|ETH)?|\$[A-Z]+)/g;
-  const symbols = text.match(symbolRegex);
-  if (symbols && symbols.length > 0) {
-    symbol = symbols[0].replace('$', '');
+  // Extract symbol (format: "💰 Symbol: BTC-USDT")
+  const symbolMatch = text.match(/Symbol:\s*([A-Z0-9]+-[A-Z]+)/i);
+  if (symbolMatch) {
+    symbol = symbolMatch[1];
   } else {
     return null;
   }
   
-  // Extract price
-  const priceRegex = /[@]?\s*([0-9]+\.?[0-9]*)/g;
-  const prices = text.match(priceRegex);
-  if (prices && prices.length > 0) {
-    price = parseFloat(prices[0].replace('@', '').trim());
+  // Determine action from message type
+  if (text.includes('VINST') || text.includes('PROFIT')) {
+    action = 'CLOSE_WIN';
+  } else if (text.includes('FÖRLUST') || text.includes('LOSS')) {
+    action = 'CLOSE_LOSS';
+  } else {
+    action = 'CLOSE';
+  }
+  
+  // Extract exit price (format: "📈 Utgångspris: $0.673000" or "📉 Utgångspris: $0.673000")
+  const exitPriceMatch = text.match(/Utgångspris:\s*\$([0-9]+\.?[0-9]*)/i);
+  if (exitPriceMatch) {
+    price = parseFloat(exitPriceMatch[1]);
   } else {
     return null;
   }
   
-  // Extract quantity
-  const qtyRegex = /QTY:?\s*([0-9]+\.?[0-9]*)/i;
-  const qtyMatch = text.match(qtyRegex);
-  if (qtyMatch) {
-    quantity = parseFloat(qtyMatch[1]);
-  }
+  // Extract entry price for quantity calculation (format: "📉 Ingångspris: $0.800000")
+  const entryPriceMatch = text.match(/Ingångspris:\s*\$([0-9]+\.?[0-9]*)/i);
   
-  // Extract profit/loss
-  const profitRegex = /(PROFIT|P\/L|PNL):?\s*([+-]?[0-9]+\.?[0-9]*)/i;
-  const profitMatch = text.match(profitRegex);
-  if (profitMatch) {
-    profit_loss = parseFloat(profitMatch[2]);
+  // Extract P/L (format: "📈 PnL: $0.1270" or "📉 PnL: $-0.0117")
+  const pnlMatch = text.match(/PnL:\s*\$([+-]?[0-9]+\.?[0-9]*)/i);
+  if (pnlMatch) {
+    profit_loss = parseFloat(pnlMatch[1]);
   }
   
   return {
