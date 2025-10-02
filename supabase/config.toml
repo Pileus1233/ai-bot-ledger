@@ -1,4 +1,4 @@
 project_id = "eetzwkrsheinicvwhglw"
 
 [functions.fetch-telegram-trades]
-verify_jwt = false
+verify_jwt = true

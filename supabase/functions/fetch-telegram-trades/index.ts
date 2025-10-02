@@ -102,17 +102,31 @@ serve(async (req) => {
   }
 
   try {
+    // Get user from JWT token
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Missing authorization header');
+    }
+
+    // Initialize Supabase client with service role for admin operations
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Verify the JWT and get user
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    
+    if (authError || !user) {
+      throw new Error('Invalid authentication token');
+    }
+
     const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
     const chatId = Deno.env.get('TELEGRAM_CHAT_ID');
 
     if (!botToken || !chatId) {
       throw new Error('Missing Telegram credentials');
     }
-
-    // Initialize Supabase client
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
 
     console.log('Fetching messages from Telegram...');
 
@@ -159,11 +173,16 @@ serve(async (req) => {
 
     console.log(`Parsed ${trades.length} trades from messages`);
 
-    // Insert trades into database
+    // Insert trades into database with user_id
     if (trades.length > 0) {
+      const tradesWithUser = trades.map(trade => ({
+        ...trade,
+        user_id: user.id
+      }));
+
       const { error: insertError } = await supabase
         .from('trades')
-        .insert(trades);
+        .insert(tradesWithUser);
 
       if (insertError) {
         console.error('Error inserting trades:', insertError);

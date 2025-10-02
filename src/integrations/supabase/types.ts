@@ -26,6 +26,7 @@ export type Database = {
           symbol: string
           telegram_message_id: number | null
           timestamp: string
+          user_id: string | null
         }
         Insert: {
           action: string
@@ -38,6 +39,7 @@ export type Database = {
           symbol: string
           telegram_message_id?: number | null
           timestamp?: string
+          user_id?: string | null
         }
         Update: {
           action?: string
@@ -50,6 +52,7 @@ export type Database = {
           symbol?: string
           telegram_message_id?: number | null
           timestamp?: string
+          user_id?: string | null
         }
         Relationships: []
       }

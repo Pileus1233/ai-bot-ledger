@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
 import { StatsCard } from "@/components/StatsCard";
 import { TradeHistory } from "@/components/TradeHistory";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, DollarSign, Activity, Percent, RefreshCw } from "lucide-react";
+import { TrendingUp, DollarSign, Activity, Percent, RefreshCw, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Session } from "@supabase/supabase-js";
 
 interface Trade {
   id: string;
@@ -21,7 +23,9 @@ const Index = () => {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const fetchTrades = async () => {
     const { data, error } = await supabase
@@ -69,7 +73,29 @@ const Index = () => {
   };
 
   useEffect(() => {
-    fetchTrades();
+    // Set up auth state listener first
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
+      setSession(currentSession);
+      if (!currentSession) {
+        navigate("/auth");
+      }
+    });
+
+    // Then check for existing session
+    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+      setSession(currentSession);
+      if (!currentSession) {
+        navigate("/auth");
+      } else {
+        fetchTrades();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!session) return;
 
     // Subscribe to realtime updates
     const channel = supabase
@@ -90,7 +116,7 @@ const Index = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [session]);
 
   // Calculate statistics
   const totalTrades = trades.length;
@@ -99,7 +125,12 @@ const Index = () => {
   const winningTrades = tradesWithPL.filter(t => (t.profit_loss || 0) > 0).length;
   const winRate = tradesWithPL.length > 0 ? (winningTrades / tradesWithPL.length) * 100 : 0;
 
-  if (loading) {
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    navigate("/auth");
+  };
+
+  if (loading || !session) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="text-foreground">Loading...</div>
@@ -116,14 +147,23 @@ const Index = () => {
             <h1 className="text-4xl font-bold text-foreground mb-2">Trading Dashboard</h1>
             <p className="text-muted-foreground">Track your AI bot's performance</p>
           </div>
-          <Button 
-            onClick={syncTelegram} 
-            disabled={syncing}
-            className="bg-accent hover:bg-accent/90 text-accent-foreground"
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            Sync Telegram
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              onClick={syncTelegram} 
+              disabled={syncing}
+              className="bg-accent hover:bg-accent/90 text-accent-foreground"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              Sync Telegram
+            </Button>
+            <Button 
+              onClick={handleSignOut}
+              variant="outline"
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign Out
+            </Button>
+          </div>
         </div>
 
         {/* Stats Grid */}
