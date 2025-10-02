@@ -5,7 +5,7 @@ import { StatsCard } from "@/components/StatsCard";
 import { TradeHistory } from "@/components/TradeHistory";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, DollarSign, Activity, Percent, RefreshCw, LogOut } from "lucide-react";
+import { TrendingUp, DollarSign, Activity, Percent, RefreshCw, LogOut, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Session } from "@supabase/supabase-js";
 
@@ -55,7 +55,7 @@ const Index = () => {
 
       toast({
         title: "Sync Complete",
-        description: `Found ${data.trades_found} new trades`,
+        description: data.message || `Found ${data.trades_found} new trades`,
       });
 
       // Refresh trades list
@@ -125,6 +125,36 @@ const Index = () => {
   const winningTrades = tradesWithPL.filter(t => (t.profit_loss || 0) > 0).length;
   const winRate = tradesWithPL.length > 0 ? Math.round((winningTrades / tradesWithPL.length) * 100 * 10) / 10 : 0;
 
+  const resetTrades = async () => {
+    if (!confirm('Are you sure you want to delete all trades? This cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      const { error } = await supabase
+        .from('trades')
+        .delete()
+        .eq('user_id', session?.user?.id);
+        
+      if (error) throw error;
+      
+      toast({
+        title: "Trades Reset",
+        description: "All trades have been deleted. You can now re-sync from Telegram.",
+      });
+      
+      // Refresh trades list
+      await fetchTrades();
+    } catch (error) {
+      console.error('Error resetting trades:', error);
+      toast({
+        title: "Reset Failed",
+        description: "Could not reset trades",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     navigate("/auth");
@@ -158,6 +188,14 @@ const Index = () => {
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
               Sync Telegram
+            </Button>
+            <Button 
+              onClick={resetTrades}
+              variant="destructive"
+              size="sm"
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Reset
             </Button>
             <Button 
               onClick={handleSignOut}

@@ -29,8 +29,14 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
   
   const text = message.text;
   
-  // Check if this is a position close message (contains P/L)
-  const isCloseMessage = text.includes('POSITION STÄNGD') || text.includes('POSITION CLOSED');
+  // Check if this is a position close message (contains P/L) - Support more Swedish patterns
+  const isCloseMessage = text.includes('POSITION STÄNGD') || 
+                        text.includes('POSITION CLOSED') ||
+                        text.includes('STÄNGD POSITION') ||
+                        text.includes('AVSLUTAD POSITION') ||
+                        text.includes('PnL:') ||
+                        text.includes('Vinst:') ||
+                        text.includes('Förlust:');
   
   if (!isCloseMessage) {
     // Skip opening trade messages and status updates - we only care about closed positions with P/L
@@ -43,11 +49,25 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
   let quantity: number | undefined;
   let profit_loss: number | undefined;
   
-  // Extract symbol (format: "💰 Symbol: BTC-USDT")
-  const symbolMatch = text.match(/Symbol:\s*([A-Z0-9]+-[A-Z]+)/i);
-  if (symbolMatch) {
-    symbol = symbolMatch[1];
-  } else {
+  // Extract symbol - Support multiple Swedish and English formats
+  const symbolPatterns = [
+    /Symbol:\s*([A-Z0-9]+-[A-Z]+)/i,
+    /Valuta:\s*([A-Z0-9]+-[A-Z]+)/i,
+    /Par:\s*([A-Z0-9]+-[A-Z]+)/i,
+    /💰\s*([A-Z0-9]+-[A-Z]+)/i,
+    /([A-Z]{3,4}-[A-Z]{3,4})/i  // Direct pattern like BTC-USDT
+  ];
+  
+  for (const pattern of symbolPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      symbol = match[1];
+      break;
+    }
+  }
+  
+  if (!symbol) {
+    console.log('No symbol found in message:', text.substring(0, 100));
     return null;
   }
   
@@ -71,10 +91,27 @@ function parseTradingMessage(message: TelegramMessage): Trade | null {
   // Extract entry price for quantity calculation (format: "📉 Ingångspris: $0.800000")
   const entryPriceMatch = text.match(/Ingångspris:\s*\$([0-9]+\.?[0-9]*)/i);
   
-  // Extract P/L (format: "📈 PnL: $0.1270" or "📉 PnL: $-0.0117")
-  const pnlMatch = text.match(/PnL:\s*\$([+-]?[0-9]+\.?[0-9]*)/i);
-  if (pnlMatch) {
-    profit_loss = parseFloat(pnlMatch[1]);
+  // Extract P/L - Support multiple Swedish and English formats
+  const pnlPatterns = [
+    /PnL:\s*\$([+-]?[0-9]+\.?[0-9]*)/i,
+    /Vinst:\s*\$?([+-]?[0-9]+\.?[0-9]*)/i,
+    /Förlust:\s*\$?([+-]?[0-9]+\.?[0-9]*)/i,
+    /Resultat:\s*\$?([+-]?[0-9]+\.?[0-9]*)/i,
+    /📈.*?\$([+-]?[0-9]+\.?[0-9]*)/i,
+    /📉.*?\$([+-]?[0-9]+\.?[0-9]*)/i
+  ];
+  
+  for (const pattern of pnlPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      let value = parseFloat(match[1]);
+      // If it was a loss pattern and value is positive, make it negative
+      if (pattern.source.includes('Förlust') && value > 0) {
+        value = -value;
+      }
+      profit_loss = value;
+      break;
+    }
   }
   
   return {
@@ -149,54 +186,104 @@ serve(async (req) => {
     await fetch(deleteWebhookUrl);
     console.log('Webhook deleted (if it existed)');
 
-    // Get the latest message ID we've processed
-    const { data: latestTrade } = await supabase
+    // Check if we should fetch historical data (when no trades exist)
+    const { count: existingTradesCount } = await supabase
       .from('trades')
-      .select('telegram_message_id')
-      .order('telegram_message_id', { ascending: false })
-      .limit(1)
-      .single();
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id);
 
-    const offset = latestTrade?.telegram_message_id 
-      ? latestTrade.telegram_message_id + 1 
-      : undefined;
-
-    // Fetch updates from Telegram
-    const telegramUrl = `https://api.telegram.org/bot${botToken}/getUpdates?chat_id=${chatId}&limit=100${offset ? `&offset=${offset}` : ''}`;
+    const shouldFetchHistorical = !existingTradesCount || existingTradesCount === 0;
     
-    const response = await fetch(telegramUrl);
-    const data = await response.json();
+    let allTrades: Trade[] = [];
+    
+    if (shouldFetchHistorical) {
+      console.log('No existing trades found, fetching historical messages...');
+      
+      // For historical data, we need to fetch in batches without offset
+      // This will get the most recent 100 messages
+      const telegramUrl = `https://api.telegram.org/bot${botToken}/getUpdates?limit=100`;
+      const response = await fetch(telegramUrl);
+      const data = await response.json();
+      
+      if (!data.ok) {
+        throw new Error(`Telegram API error: ${data.description}`);
+      }
+      
+      console.log(`Received ${data.result?.length || 0} historical updates from Telegram`);
+      
+      // Parse all messages for trading data
+      for (const update of data.result || []) {
+        if (update.message && update.message.chat && update.message.chat.id.toString() === chatId) {
+          const trade = parseTradingMessage(update.message);
+          if (trade) {
+            allTrades.push(trade);
+          }
+        }
+      }
+    } else {
+      // Get the latest message ID we've processed
+      const { data: latestTrade } = await supabase
+        .from('trades')
+        .select('telegram_message_id')
+        .eq('user_id', user.id)
+        .order('telegram_message_id', { ascending: false })
+        .limit(1)
+        .single();
+
+      const offset = latestTrade?.telegram_message_id 
+        ? latestTrade.telegram_message_id + 1 
+        : undefined;
+
+      // Fetch only new updates from Telegram
+      const telegramUrl = `https://api.telegram.org/bot${botToken}/getUpdates?limit=100${offset ? `&offset=${offset}` : ''}`;
+      
+      const response = await fetch(telegramUrl);
+      const data = await response.json();
+      
+      if (!data.ok) {
+        throw new Error(`Telegram API error: ${data.description}`);
+      }
+      
+      console.log(`Received ${data.result?.length || 0} new updates from Telegram`);
+      
+      // Parse messages for trading data
+      for (const update of data.result || []) {
+        if (update.message && update.message.chat && update.message.chat.id.toString() === chatId) {
+          const trade = parseTradingMessage(update.message);
+          if (trade) {
+            allTrades.push(trade);
+          }
+        }
+      }
+    }
 
     if (!data.ok) {
       throw new Error(`Telegram API error: ${data.description}`);
     }
 
-    console.log(`Received ${data.result?.length || 0} updates from Telegram`);
+    console.log(`Parsed ${allTrades.length} trades from messages`);
 
-    const trades: Trade[] = [];
+    // Remove duplicates based on telegram_message_id
+    const uniqueTrades = allTrades.filter((trade, index, self) => 
+      index === self.findIndex(t => t.telegram_message_id === trade.telegram_message_id)
+    );
 
-    // Parse messages for trading data
-    for (const update of data.result || []) {
-      if (update.message) {
-        const trade = parseTradingMessage(update.message);
-        if (trade) {
-          trades.push(trade);
-        }
-      }
-    }
-
-    console.log(`Parsed ${trades.length} trades from messages`);
+    console.log(`Found ${uniqueTrades.length} unique trades after deduplication`);
 
     // Insert trades into database with user_id
-    if (trades.length > 0) {
-      const tradesWithUser = trades.map(trade => ({
+    if (uniqueTrades.length > 0) {
+      const tradesWithUser = uniqueTrades.map(trade => ({
         ...trade,
         user_id: user.id
       }));
 
+      // Use upsert to avoid duplicate entries
       const { error: insertError } = await supabase
         .from('trades')
-        .insert(tradesWithUser);
+        .upsert(tradesWithUser, {
+          onConflict: 'telegram_message_id',
+          ignoreDuplicates: true
+        });
 
       if (insertError) {
         console.error('Error inserting trades:', insertError);
@@ -207,8 +294,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        trades_found: trades.length,
-        message: `Successfully processed ${trades.length} trades`
+        trades_found: uniqueTrades.length,
+        message: shouldFetchHistorical 
+          ? `Successfully imported ${uniqueTrades.length} historical trades`
+          : `Successfully processed ${uniqueTrades.length} new trades`
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
