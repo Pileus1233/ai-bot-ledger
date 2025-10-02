@@ -130,6 +130,26 @@ serve(async (req) => {
 
     console.log('Fetching messages from Telegram...');
 
+    // First, assign any orphaned trades (without user_id) to current user
+    const { data: orphanedTrades, error: orphanError } = await supabase
+      .from('trades')
+      .select('id')
+      .is('user_id', null);
+
+    if (orphanedTrades && orphanedTrades.length > 0) {
+      console.log(`Found ${orphanedTrades.length} orphaned trades, assigning to user ${user.id}`);
+      const { error: updateError } = await supabase
+        .from('trades')
+        .update({ user_id: user.id })
+        .is('user_id', null);
+      
+      if (updateError) {
+        console.error('Error updating orphaned trades:', updateError);
+      } else {
+        console.log('Successfully assigned orphaned trades to current user');
+      }
+    }
+
     // Delete any existing webhook first (required to use getUpdates)
     const deleteWebhookUrl = `https://api.telegram.org/bot${botToken}/deleteWebhook`;
     await fetch(deleteWebhookUrl);
